@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>ガンバレ TOSHIMASA</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #222;
+            overflow: hidden;
+            touch-action: none;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        canvas {
+            background-color: #87CEEB;
+            max-width: 100vw;
+            max-height: 100vh;
+            object-fit: contain;
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+        }
+    </style>
+</head>
+<body>
+
+<canvas id="gameCanvas" width="800" height="450"></canvas>
+
+<script>
+    const canvas = document.getElementById("gameCanvas");
+    const ctx = canvas.getContext("2d");
+
+    // 【変更1】画像データをすべて.pngに変更
+    const images = {};
+    const imgData = [
+        { name: 'bg', src: 'bg.png' },
+        { name: 'logo', src: 'logo.png' },
+        { name: 'player', src: 'player.png' },
+        { name: 'enemy1', src: 'enemy1.png' },
+        { name: 'enemy2', src: 'enemy2.png' },
+        { name: 'enemy3', src: 'enemy3.png' }
+    ];
+
+    imgData.forEach(data => {
+        let img = new Image();
+        img.src = data.src;
+        img.loaded = false;
+        img.onload = () => img.loaded = true;
+        images[data.name] = img;
+    });
+
+    let gameState = 0; 
+    let frames = 0;
+    let score = 0;
+    let baseSpeed = 5;
+    let logoY = -200;
+
+    const player = {
+        x: 100,
+        y: 0,
+        width: 40,
+        height: 60,
+        dy: 0,
+        gravity: 0.8,
+        jumpPower: -14,
+        ground: 350,
+        update: function() {
+            this.dy += this.gravity;
+            this.y += this.dy;
+            if (this.y + this.height > this.ground) {
+                this.y = this.ground - this.height;
+                this.dy = 0;
+            }
+        },
+        draw: function() {
+            if (images.player.loaded) {
+                ctx.drawImage(images.player, this.x, this.y, this.width, this.height);
+            } else {
+                ctx.fillStyle = "blue";
+                ctx.fillRect(this.x, this.y, this.width, this.height);
+            }
+        },
+        jump: function() {
+            if (this.y + this.height >= this.ground) {
+                this.dy = this.jumpPower;
+            }
+        }
+    };
+
+    let enemies = [];
+    let enemy3Active = false;
+
+    function spawnEnemy() {
+        if (enemy3Active) return;
+
+        let spawnRate = Math.max(60, 150 - Math.floor(score / 50));
+        
+        if (frames % spawnRate === 0) {
+            let rand = Math.random();
+            let speedMulti = 1 + (score / 1000);
+            let e1Speed = (baseSpeed + 4) * speedMulti; // 敵1の速度を基準にする
+
+            if (rand < 0.15 && score > 500) {
+                // 敵3：目からビーム
+                enemies.push({
+                    type: 3, x: 800, y: player.ground - 80, width: 60, height: 80,
+                    state: 'enter', timer: 0, lifeTime: 600, refSpeed: e1Speed
+                });
+                enemy3Active = true;
+            } else if (rand < 0.4) {
+                // 穴
+                enemies.push({
+                    type: 0, x: 800, y: player.ground, width: 80, height: canvas.height - player.ground, speed: baseSpeed * speedMulti
+                });
+            } else if (rand < 0.7) {
+                // 敵1：高速体当たり
+                enemies.push({
+                    type: 1, x: 800, y: player.ground - 50, width: 40, height: 50, speed: e1Speed
+                });
+            } else {
+                // 【変更2】敵2：緩急のある直線的な動きに変更
+                enemies.push({
+                    type: 2, x: 800, y: player.ground - 40, width: 40, height: 40, 
+                    baseSpeed: (baseSpeed - 1) * speedMulti, timer: 0
+                });
+            }
+        }
+    }
+
+    function updateAndDrawEnemies() {
+        for (let i = 0; i < enemies.length; i++) {
+            let e = enemies[i];
+
+            if (e.type === 0) { 
+                e.x -= e.speed;
+                ctx.fillStyle = "#222";
+                ctx.fillRect(e.x, e.y, e.width, e.height);
+                if (player.x + player.width > e.x + 20 && player.x < e.x + e.width - 20 && player.y + player.height >= player.ground) {
+                    gameState = 2;
+                }
+            } 
+            else if (e.type === 1) { 
+                e.x -= e.speed;
+                if (images.enemy1.loaded) ctx.drawImage(images.enemy1, e.x, e.y, e.width, e.height);
+                else { ctx.fillStyle = "green"; ctx.fillRect(e.x, e.y, e.width, e.height); }
+                checkCollision(e);
+            } 
+            else if (e.type === 2) { 
+                // 【変更2の実装】サイン波を使って速度を変動させる（急に速くなったり遅くなったりする）
+                e.timer++;
+                let currentSpeed = e.baseSpeed + Math.sin(e.timer * 0.1) * (e.baseSpeed * 0.8);
+                e.x -= Math.max(0.5, currentSpeed); // 最低でも少しは左へ進む
+
+                if (images.enemy2.loaded) ctx.drawImage(images.enemy2, e.x, e.y, e.width, e.height);
+                else { ctx.fillStyle = "white"; ctx.fillRect(e.x, e.y, e.width, e.height); }
+                checkCollision(e);
+            } 
+            else if (e.type === 3) { 
+                e.timer++;
+                if (e.state === 'enter') {
+                    e.x -= 2; 
+                    if (e.x < 650) e.state = 'attack';
+                } else if (e.state === 'attack') {
+                    // チャージエフェクト（オーラ）
+                    if (e.timer % 120 < 60) {
+                        ctx.fillStyle = "rgba(255, 255, 0, 0.4)";
+                        ctx.fillRect(e.x - 10, e.y - 10, e.width + 20, e.height + 20);
+                    } 
+                    // 【変更3の実装】ビームを「飛び道具（Type4）」として発射
+                    if (e.timer % 120 === 60) {
+                        enemies.push({
+                            type: 4, x: e.x - 20, y: e.y + 25, width: 50, height: 15, 
+                            speed: e.refSpeed * 1.2 // 敵1の速度の1.2倍
+                        });
+                    }
+                    if (e.timer > e.lifeTime) e.state = 'leave'; 
+                } else if (e.state === 'leave') {
+                    e.y -= 5;
+                }
+
+                if (images.enemy3.loaded) ctx.drawImage(images.enemy3, e.x, e.y, e.width, e.height);
+                else { ctx.fillStyle = "purple"; ctx.fillRect(e.x, e.y, e.width, e.height); }
+                checkCollision(e);
+            }
+            else if (e.type === 4) {
+                // 発射されたビームの処理
+                e.x -= e.speed;
+                ctx.fillStyle = "red";
+                ctx.fillRect(e.x, e.y, e.width, e.height); // ビームの描画
+                checkCollision(e, 5); // ビームの当たり判定は少し厳しめに
+            }
+
+            // 画面外に出たら削除
+            if (e.x + e.width < 0 || e.y < -100) {
+                if (e.type === 3) enemy3Active = false;
+                enemies.splice(i, 1);
+                i--;
+            }
+        }
+    }
+
+    // 当たり判定関数（customMarginで遊びを調整）
+    function checkCollision(e, customMargin = 10) {
+        if (player.x + customMargin < e.x + e.width &&
+            player.x + player.width - customMargin > e.x &&
+            player.y + customMargin < e.y + e.height &&
+            player.y + player.height - customMargin > e.y) {
+            gameState = 2; // ゲームオーバー
+        }
+    }
+
+    function drawBackground() {
+        ctx.fillStyle = "#87CEEB"; 
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        let bgScroll = (frames * (baseSpeed * 0.5)) % 200;
+        ctx.fillStyle = "#A9A9A9";
+        for(let i = -1; i < 6; i++) {
+            ctx.fillRect(i * 200 - bgScroll, 150, 100, 200);
+            ctx.beginPath();
+            ctx.moveTo(i * 200 - bgScroll - 10, 150);
+            ctx.lineTo(i * 200 - bgScroll + 50, 80);
+            ctx.lineTo(i * 200 - bgScroll + 110, 150);
+            ctx.fill();
+        }
+
+        ctx.fillStyle = "#556B2F";
+        ctx.fillRect(0, player.ground, canvas.width, canvas.height - player.ground);
+    }
+
+    function loop() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        if (gameState === 0) {
+            if (images.bg.loaded) ctx.drawImage(images.bg, 0, 0, canvas.width, canvas.height);
+            else { ctx.fillStyle = "#333"; ctx.fillRect(0, 0, canvas.width, canvas.height); }
+
+            if (logoY < 100) logoY += 5;
+            
+            if (images.logo.loaded) {
+                let w = 400; let h = w * (images.logo.height / images.logo.width);
+                ctx.drawImage(images.logo, canvas.width/2 - w/2, logoY, w, h);
+            } else {
+                ctx.fillStyle = "yellow";
+                ctx.font = "bold 50px sans-serif";
+                ctx.textAlign = "center";
+                ctx.fillText("ガンバレ TOSHIMASA", canvas.width/2, logoY + 50);
+            }
+
+            ctx.fillStyle = "white";
+            ctx.font = "bold 24px sans-serif";
+            ctx.textAlign = "center";
+            if (Math.floor(Date.now() / 500) % 2 === 0) {
+                ctx.fillText("TAP TO START", canvas.width/2, 350);
+            }
+        } 
+        else if (gameState === 1) {
+            frames++;
+            score += 1; 
+
+            drawBackground();
+            player.update();
+            player.draw();
+            spawnEnemy();
+            updateAndDrawEnemies();
+
+            ctx.fillStyle = "white";
+            ctx.font = "bold 24px sans-serif";
+            ctx.textAlign = "left";
+            ctx.fillText("SCORE: " + score, 20, 40);
+        } 
+        else if (gameState === 2) {
+            drawBackground();
+            player.draw(); 
+            for (let e of enemies) {
+                if (e.type === 0) {
+                    ctx.fillStyle = "#222"; ctx.fillRect(e.x, e.y, e.width, e.height);
+                } else if (e.type === 4) {
+                    ctx.fillStyle = "red"; ctx.fillRect(e.x, e.y, e.width, e.height);
+                } else {
+                    if (e.type === 1) ctx.fillStyle = "green";
+                    if (e.type === 2) ctx.fillStyle = "white";
+                    if (e.type === 3) ctx.fillStyle = "purple";
+                    if (!images[`enemy${e.type}`]?.loaded) ctx.fillRect(e.x, e.y, e.width, e.height);
+                    else ctx.drawImage(images[`enemy${e.type}`], e.x, e.y, e.width, e.height);
+                }
+            }
+
+            ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            ctx.fillStyle = "red";
+            ctx.font = "bold 60px sans-serif";
+            ctx.textAlign = "center";
+            ctx.fillText("GAME OVER", canvas.width/2, canvas.height/2 - 20);
+
+            ctx.fillStyle = "white";
+            ctx.font = "24px sans-serif";
+            ctx.fillText("SCORE: " + score, canvas.width/2, canvas.height/2 + 20);
+            ctx.fillText("TAP TO RETRY", canvas.width/2, canvas.height/2 + 70);
+        }
+
+        requestAnimationFrame(loop);
+    }
+
+    function handleInput(e) {
+        e.preventDefault(); 
+
+        if (gameState === 0) {
+            gameState = 1;
+            frames = 0;
+            score = 0;
+            enemies = [];
+            enemy3Active = false;
+        } else if (gameState === 1) {
+            player.jump();
+        } else if (gameState === 2) {
+            gameState = 1;
+            frames = 0;
+            score = 0;
+            enemies = [];
+            enemy3Active = false;
+            player.y = player.ground - player.height;
+            player.dy = 0;
+        }
+    }
+
+    window.addEventListener("mousedown", handleInput);
+    window.addEventListener("touchstart", handleInput, {passive: false});
+    window.addEventListener("keydown", function(e) {
+        if (e.code === "Space") handleInput(e);
+    });
+
+    loop();
+</script>
+
+</body>
+</html>
